@@ -1,0 +1,446 @@
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
+#include <QMenuBar>
+#include <QLayout>
+#include "averagestrategy.h"
+#include <QKeyEvent>
+
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent)
+    , ui(new Ui::MainWindow)
+{
+    ui->setupUi(this);
+
+    DBmanger::getInstance()->init();
+    CalculationStrategy* average = new AverageStrategy;
+    DBmanger::getInstance()->addStrategy(average);
+    QMenuBar* menu = new QMenuBar(this);
+    menu->addAction("Students", this, SLOT(openStudentList()));
+    this->layout()->setMenuBar(menu);
+
+    subject = new SubjectModel(this);
+    subject->setView(ui->tableView);
+    updateSubjectList();
+
+    studentList = new StudentListForm(this);
+    removeDialog = new RemoveDialog(this);
+
+    connect(ui->addSubjectPushButton,  &QPushButton::clicked, this, &MainWindow::addSubject);
+    connect(ui->subjectListWidget, &QListWidget::currentRowChanged, this, &MainWindow::subjectChanged);
+    connect(ui->addStudentPushButton, &QPushButton::clicked, this, &MainWindow::showAddStudent);
+    connect(ui->addTaskPushButton, &QPushButton::clicked, this, &MainWindow::showAddTask);
+    connect(ui->addStudentWidget, &AddStudentWidget::cancel, this, &MainWindow::hideAddStudent);
+    connect(ui->addTaskWidget, &AddTaskWidget::cancel, this, &MainWindow::hideAddTask);
+    connect(ui->addStudentWidget, &AddStudentWidget::ok, this, &MainWindow::addStudent);
+    connect(ui->addTaskWidget, &AddTaskWidget::ok, this, &MainWindow::addTask);
+
+    QSignalMapper* mapper = new QSignalMapper(this);
+    connect(mapper, &QSignalMapper::mappedInt, this, &MainWindow::showAddCalc);
+
+    connect(ui->addCalcColumnPushButton, &QPushButton::clicked, mapper, qOverload<>(&QSignalMapper::map));
+    mapper->setMapping(ui->addCalcColumnPushButton, GeneratorType::COLUMN);
+
+    connect(ui->addCalcRowPushButton, &QPushButton::clicked, mapper, qOverload<>(&QSignalMapper::map));
+    mapper->setMapping(ui->addCalcRowPushButton, GeneratorType::ROW);
+
+    connect(ui->addCalcLayerPushButton, &QPushButton::clicked, mapper, qOverload<>(&QSignalMapper::map));
+    mapper->setMapping(ui->addCalcLayerPushButton, GeneratorType::LAYER);
+
+    connect(ui->addGeneratorWidget, &GeneratorWizzard::cancel, this, &MainWindow::hideAddCalc);
+    connect(ui->addGeneratorWidget, &GeneratorWizzard::ok, this, &MainWindow::addCalc);
+
+    connect(subject, &SubjectModel::selectionChange, this, &MainWindow::selectionChanged);
+
+    connect(ui->generatorEditorWidget, &GeneratorEditor::selectionStart, this, &MainWindow::selectionStart);
+    connect(ui->generatorEditorWidget, &GeneratorEditor::selectionEnd, this, &MainWindow::selectionEnd);
+    connect(ui->addGeneratorWidget, &GeneratorWizzard::selectionStart, this, &MainWindow::selectionStart);
+    connect(ui->addGeneratorWidget, &GeneratorWizzard::selectionEnd, this, &MainWindow::selectionEnd);
+
+    connect(ui->generatorEditorWidget, &GeneratorEditor::edit, this, &MainWindow::updateCalc);
+
+    connect(ui->swapStudentWidget, &SwapStudentWidget::edit, this, &MainWindow::swapStudent);
+
+    ui->tableView->installEventFilter(this);
+    ui->layerListWidget->installEventFilter(this);
+}
+
+void MainWindow::showEvent(QShowEvent *e)
+{
+    ui->addStudentWidget->hide();
+    ui->addTaskWidget->hide();
+    ui->addGeneratorWidget->hide();
+    ui->generatorEditorWidget->hide();
+    ui->swapStudentWidget->hide();
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* e)
+{
+    if(e->type() == QEvent::KeyPress)
+    {
+        if(obj == ui->tableView)
+        {
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Delete)
+            {
+                if(subject->getSelectedColumn() != nullptr)
+                {
+                    removeDialog->setList(subject->getSubject()->table->getPotentialyRemoved(subject->getSelectedColumn()));
+                    if(removeDialog->exec() == QDialog::Accepted)
+                    {
+                        int taskId = -1;
+                        if(subject->getSelectedColumn()->task != nullptr)
+                        {
+                            taskId = subject->getSelectedColumn()->task->id;
+                        }
+                        DBmanger::getInstance()->removeColumn(subject->getSelectedColumn(), subject->getSubject());
+                        if()
+                        subject->updateSubject();
+                        updateLayerList();
+                    }
+                }
+
+                if(subject->getSelectedRow() != nullptr)
+                {
+                    removeDialog->setList(subject->getSubject()->table->getPotentialyRemoved(subject->getSelectedColumn()));
+                    if(removeDialog->exec() == QDialog::Accepted)
+                    {
+                        DBmanger::getInstance()->removeRow(subject->getSelectedRow(), subject->getSubject());
+                        subject->updateSubject();
+                        updateLayerList();
+                    }
+                }
+            }
+
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Right &&
+                subject->getSelectedColumn() != nullptr &&
+                subject->getSelectedColumn()->order < subject->getSubject()->table->columns.size() - 1)
+            {
+                DBmanger::getInstance()->changeOrder(subject->getSelectedColumn(), subject->getSelectedColumn()->order + 1);
+                subject->updateSubject();
+                updateLayerList();
+            }
+
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Left &&
+                subject->getSelectedColumn() != nullptr &&
+                subject->getSelectedColumn()->order > 0)
+            {
+                DBmanger::getInstance()->changeOrder(subject->getSelectedColumn(), subject->getSelectedColumn()->order - 1);
+                subject->updateSubject();
+                updateLayerList();
+            }
+
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Down &&
+                subject->getSelectedRow() != nullptr &&
+                subject->getSelectedRow()->order < subject->getSubject()->table->rows.size() - 1)
+            {
+                DBmanger::getInstance()->changeOrder(subject->getSelectedRow(), subject->getSelectedRow()->order + 1);
+                subject->updateSubject();
+                updateLayerList();
+            }
+
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Up &&
+                subject->getSelectedRow() != nullptr &&
+                subject->getSelectedRow()->order > 0)
+            {
+                DBmanger::getInstance()->changeOrder(subject->getSelectedRow(), subject->getSelectedRow()->order - 1);
+                subject->updateSubject();
+                updateLayerList();
+            }
+
+        }
+
+        if(obj == ui->layerListWidget && ui->layerListWidget->currentRow() != -1)
+        {
+            ViewLayer* layer = subject->getSubject()->table->layers[ui->layerListWidget->currentRow()];
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Delete)
+            {
+
+                removeDialog->setList(subject->getSubject()->table->getPotentialyRemoved(layer));
+                if(removeDialog->exec() == QDialog::Accepted)
+                {
+                    DBmanger::getInstance()->removeLayer(layer, subject->getSubject());
+                    subject->updateSubject();
+                    updateLayerList();
+                }
+
+            }
+
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Down &&
+                layer->order < subject->getSubject()->table->layers.size() - 1)
+            {
+                DBmanger::getInstance()->changeOrder(layer, subject->getSelectedRow()->order + 1);
+                subject->updateSubject();
+                updateLayerList();
+            }
+
+            if(static_cast<QKeyEvent*>(e)->key() == Qt::Key_Up &&
+                layer->order > 0)
+            {
+                DBmanger::getInstance()->changeOrder(layer, subject->getSelectedRow()->order - 1);
+                subject->updateSubject();
+                updateLayerList();
+            }
+
+        }
+    }
+
+
+    return false;
+}
+
+MainWindow::~MainWindow()
+{
+    delete ui;
+    delete DBmanger::getInstance();
+}
+
+void MainWindow::openStudentList()
+{
+    studentList->exec();
+    subject->updateSubject();
+}
+
+void MainWindow::addSubject()
+{
+    DBmanger::getInstance()->addSubject(ui->subjectLineEdit->text());
+    updateSubjectList();
+}
+
+void MainWindow::subjectChanged()
+{
+    if(ui->subjectListWidget->currentRow() >= 0 && ui->subjectListWidget->currentRow() < subjectList.size())
+    {
+        subject->setSubject(DBmanger::getInstance()->getSubjectById(subjectList[ui->subjectListWidget->currentRow()].id));
+        updateLayerList();
+    }
+}
+
+void MainWindow::showAddStudent()
+{
+    if(!addingInProgres())
+    {
+        hideEditing();
+        ui->addStudentWidget->setList(DBmanger::getInstance()->getStudentList());
+        ui->addStudentWidget->show();
+    }
+
+}
+
+void MainWindow::hideAddStudent()
+{
+    ui->addStudentWidget->hide();
+}
+
+void MainWindow::addStudent()
+{
+    DBmanger::getInstance()->addStudentToSubject(ui->addStudentWidget->getStudend(), subject->getSubject());
+    ui->addStudentWidget->hide();
+    subject->updateSubject();
+    updateLayerList();
+}
+
+void MainWindow::showAddTask()
+{
+    if(!addingInProgres())
+    {
+        hideEditing();
+        ui->addTaskWidget->show();
+    }
+}
+
+void MainWindow::hideAddTask()
+{
+    ui->addTaskWidget->hide();
+}
+
+void MainWindow::addTask()
+{
+    DBmanger::getInstance()->addTask(ui->addTaskWidget->getTaskName(), subject->getSubject());
+    ui->addTaskWidget->hide();
+    subject->updateSubject();
+    updateLayerList();
+}
+
+void MainWindow::showAddCalc(int type)
+{
+    if(!addingInProgres() && subject->getSubject() != nullptr)
+    {
+        hideEditing();
+        ui->generatorEditorWidget->hide();
+        ui->addGeneratorWidget->setType(((GeneratorType)type));
+        ui->addGeneratorWidget->setModel(subject);
+        ui->addGeneratorWidget->setLayerList(subject->getSubject()->table->layers);
+        ui->addGeneratorWidget->setStrategyList(DBmanger::getInstance()->getStrategyList());
+        ui->addGeneratorWidget->show();
+    }
+}
+
+void MainWindow::hideAddCalc()
+{
+    ui->addGeneratorWidget->hide();
+}
+
+void MainWindow::addCalc()
+{
+    if(subject->getSubject() != nullptr)
+    {
+        switch (ui->addGeneratorWidget->getType()) {
+        case GeneratorType::COLUMN:
+            DBmanger::getInstance()->addCalculatedColumn(ui->addGeneratorWidget->getGenerator(), ui->addGeneratorWidget->getName(), ui->addGeneratorWidget->getLayer(), subject->getSubject());
+            break;
+        case GeneratorType::ROW:
+            DBmanger::getInstance()->addCalculatedRow(ui->addGeneratorWidget->getGenerator(), ui->addGeneratorWidget->getName(), ui->addGeneratorWidget->getLayer(), subject->getSubject());
+            break;
+        case GeneratorType::LAYER:
+            DBmanger::getInstance()->addCalculatedLayer(ui->addGeneratorWidget->getGenerator(), ui->addGeneratorWidget->getName(), subject->getSubject());
+            break;
+        default:
+            break;
+        }
+    }
+    hideAddCalc();
+    subject->updateSubject();
+    updateLayerList();
+
+}
+
+void MainWindow::selectLayer(int index)
+{
+    if(subject->getSelectedLayer() != -1)
+    {
+       subject->setSelectedLayer(index);
+    }
+}
+
+void MainWindow::selectionChanged()
+{
+    if(addingInProgres())
+    {
+        return;
+    }
+    if(parametrSelection)
+    {
+        return;
+    }
+
+    if(ui->generatorEditorWidget->isVisible())
+    {
+        ui->generatorEditorWidget->hide();
+    }
+    if(ui->swapStudentWidget->isVisible())
+    {
+        ui->swapStudentWidget->hide();
+    }
+
+
+
+    if(subject->getSelectedColumn() != nullptr)
+    {
+        for(int i = 0; i < subject->getSubject()->table->generators.size(); i++)
+        {
+            if(subject->getSubject()->table->generators[i]->destination->column == subject->getSelectedColumn())
+            {
+                ui->generatorEditorWidget->setGenerator(subject->getSubject()->table->generators[i]);
+                ui->generatorEditorWidget->setModel(subject);
+                ui->generatorEditorWidget->show();
+                break;
+            }
+        }
+    }
+
+    if(subject->getSelectedRow() != nullptr)
+    {
+        for(int i = 0; i < subject->getSubject()->table->generators.size(); i++)
+        {
+            if(subject->getSubject()->table->generators[i]->destination->row == subject->getSelectedRow())
+            {
+                ui->generatorEditorWidget->setGenerator(subject->getSubject()->table->generators[i]);
+                ui->generatorEditorWidget->setModel(subject);
+                ui->generatorEditorWidget->show();
+                break;
+            }
+        }
+        if(subject->getSelectedRow()->student != nullptr)
+        {
+            ui->swapStudentWidget->setStudentList(DBmanger::getInstance()->getStudentList());
+            ui->swapStudentWidget->setNewStudent(*(subject->getSelectedRow()->student));
+            ui->swapStudentWidget->setOldStudent(*(subject->getSelectedRow()->student));
+            ui->swapStudentWidget->show();
+        }
+    }
+}
+
+void MainWindow::updateCalc()
+{
+    if(subject->getSubject() != nullptr && ui->generatorEditorWidget->getGenerator() != nullptr)
+    {
+        DBmanger::getInstance()->updateGeneratorParametrs(ui->generatorEditorWidget->getGenerator(), ui->generatorEditorWidget->getParametrs(), subject->getSubject());
+        subject->updateSubject();
+        updateLayerList();
+    }
+}
+
+void MainWindow::selectionStart()
+{
+    parametrSelection = true;
+    subject->setSelectedLayer(0);
+}
+
+void MainWindow::selectionEnd()
+{
+    subject->clearSelection();
+    subject->setSelectedLayer(-1);
+    parametrSelection = false;
+}
+
+void MainWindow::swapStudent()
+{
+    if(subject != nullptr)
+    {
+        DBmanger::getInstance()->swapStudents(ui->swapStudentWidget->getOldStudent(), ui->swapStudentWidget->getNewStudent(), subject->getSubject());
+        subject->updateSubject();
+        updateLayerList();
+    }
+}
+
+bool MainWindow::addingInProgres()
+{
+    return  ui->addStudentWidget->isVisible() ||
+            ui->addTaskWidget->isVisible() ||
+            ui->addGeneratorWidget->isVisible();
+}
+
+void MainWindow::updateSubjectList()
+{
+    subjectList = DBmanger::getInstance()->getSubjectList();
+    ui->subjectListWidget->clear();
+    for(int i = 0; i < subjectList.size(); i++)
+    {
+        ui->subjectListWidget->addItem(subjectList[i].name);
+    }
+}
+
+void MainWindow::updateLayerList()
+{
+    ui->layerListWidget->clear();
+    if(subject->getSubject() != nullptr)
+    {
+        for(int i = 0 ; i < subject->getSubject()->table->layers.size(); i++)
+        {
+            if(subject->getSubject()->table->layers[i]->name == "__marks")
+            {
+                ui->layerListWidget->addItem("Оцінки");
+            }
+            else
+            {
+                ui->layerListWidget->addItem(subject->getSubject()->table->layers[i]->name);
+            }
+        }
+    }
+}
+
+void MainWindow::hideEditing()
+{
+    ui->generatorEditorWidget->hide();
+    ui->swapStudentWidget->hide();
+}
+
